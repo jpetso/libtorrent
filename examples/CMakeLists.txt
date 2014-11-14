@@ -2,6 +2,8 @@ project(libtorrent-examples)
 cmake_minimum_required(VERSION 2.6)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
+option(libtorrent_includes_asio_source "define as OFF if libtorrent was built without asio sources" ON)
+
 # Add extra include and library search directories so examples can optionally
 # be built without a prior "make install" of libtorrent.
 list(INSERT CMAKE_INCLUDE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/../include")
@@ -21,9 +23,18 @@ find_package(Boost REQUIRED COMPONENTS system)
 include_directories(${LibtorrentRasterbar_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 add_definitions(${LibtorrentRasterbar_DEFINITIONS})
 
+if(NOT libtorrent_has_asio_source)
+    set(asio_sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/asio.cpp)
+
+    if(LibtorrentRasterbar_OPENSSL_ENABLED)
+        list(APPEND asio_sources ${CMAKE_CURRENT_SOURCE_DIR}/../src/asio_ssl.cpp)
+    endif()
+endif()
+
 FILE(GLOB examples RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.cpp")
 foreach(s ${examples})
     get_filename_component (sn ${s} NAME_WE)
-    add_executable(${sn} ${s})
+    add_executable(${sn} ${s} ${asio_sources})
     target_link_libraries(${sn} ${LibtorrentRasterbar_LIBRARIES} ${Boost_LIBRARIES})
 endforeach(s)

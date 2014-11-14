@@ -8,7 +8,6 @@ set(sources
 	alert
 	alert_manager
 	allocator
-	asio
 	assert
 	bandwidth_limit
 	bandwidth_manager
@@ -122,6 +121,7 @@ set(includes include ed25519/src)
 
 option(shared "build libtorrent as a shared library" ON)
 option(static_runtime "build libtorrent with static runtime" OFF)
+option(asio_source "include Boost.Asio implementation (src.hpp) in library" ON)
 option(tcmalloc "link against google performance tools tcmalloc" OFF)
 option(pool-allocators "Uses a pool allocator for disk and piece buffers" ON)
 option(encryption "link against openssl and enable encryption" ON)
@@ -157,8 +157,11 @@ endif (build_tests)
 
 include_directories(${includes})
 
+set(asio_sources src/asio.cpp)
+
 if (encryption)
-	list(APPEND sources pe_crypto asio_ssl)
+	list(APPEND sources pe_crypto)
+	list(APPEND asio_sources src/asio_ssl.cpp)
 	if(NOT DEFINED OPENSSL_INCLUDE_DIR OR NOT DEFINED OPENSSL_LIBRARIES)
 		FIND_PACKAGE(OpenSSL REQUIRED)
 	endif()
@@ -180,6 +183,13 @@ foreach(s ${sources})
 	list(APPEND sources2 src/${s})
 endforeach(s)
 
+if (asio_source)
+	list(APPEND sources2 ${asio_sources})
+else()
+	message(STATUS "Building without Boost.Asio implementation (src.hpp)")
+	set(asio_executable_sources ${asio_sources})
+endif()
+
 if (dht)
 	foreach(s ${kademlia_sources})
 		list(APPEND sources2 src/kademlia/${s})
@@ -189,11 +199,6 @@ if (dht)
 	endforeach(s)
 else()
 	add_definitions(-DTORRENT_DISABLE_DHT)
-endif()
-
-if(NOT MSVC)
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden")
-	set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fvisibility-inlines-hidden")
 endif()
 
 if (shared)
@@ -217,6 +222,11 @@ else (shared)
 		endforeach()
 	endif()
 	add_library(torrent-rasterbar STATIC ${sources2})
+endif()
+
+if(NOT MSVC)
+	set_target_properties(torrent-rasterbar PROPERTIES COMPILE_FLAGS
+		"-fvisibility=hidden -fvisibility-inlines-hidden")
 endif()
 
 # Boost
@@ -345,7 +355,7 @@ if(build_tests)
 
 	foreach(s ${tests})
 		get_filename_component (sn ${s} NAME_WE)
-		add_executable(${sn} ${s})
+		add_executable(${sn} ${s} ${asio_executable_sources})
 		target_link_libraries(${sn} torrent-rasterbar test_common)
 		add_test(${sn} ${s})
 	endforeach(s)
