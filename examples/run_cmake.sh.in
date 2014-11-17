@@ -2,6 +2,7 @@
 
 cd ${libtorrent_BINARY_DIR}/examples
 cmake \
+    -D abi=${abi} \
     -G "${CMAKE_GENERATOR}" \
     $@ \
     ${libtorrent_SOURCE_DIR}/examples
