@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 2.6)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
 option(libtorrent_includes_asio_source "define as OFF if libtorrent was built without asio sources" ON)
+option(cpp11 "define as ON if libtorrent was build with C++11 ABI" OFF)
 
 # Add extra include and library search directories so examples can optionally
 # be built without a prior "make install" of libtorrent.
@@ -30,6 +31,10 @@ if(NOT libtorrent_has_asio_source)
     if(LibtorrentRasterbar_OPENSSL_ENABLED)
         list(APPEND asio_sources ${CMAKE_CURRENT_SOURCE_DIR}/../src/asio_ssl.cpp)
     endif()
+endif()
+
+if (cpp11)
+	add_definitions(-std=c++11)
 endif()
 
 FILE(GLOB examples RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.cpp")
