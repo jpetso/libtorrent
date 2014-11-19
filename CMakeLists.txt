@@ -227,7 +227,7 @@ else (shared)
 	add_library(torrent-rasterbar STATIC ${sources2})
 endif()
 
-if(NOT MSVC)
+if(shared AND NOT MSVC)
 	set_target_properties(torrent-rasterbar PROPERTIES COMPILE_FLAGS
 		"-fvisibility=hidden -fvisibility-inlines-hidden")
 endif()
