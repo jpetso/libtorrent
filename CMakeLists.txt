@@ -122,7 +122,10 @@ set(includes include ed25519/src)
 option(shared "build libtorrent as a shared library" ON)
 option(static_runtime "build libtorrent with static runtime" OFF)
 option(asio_source "include Boost.Asio implementation (src.hpp) in library" ON)
-option(cpp11 "build with C++11 support (affects ABI)" OFF)
+if (NOT MSVC)
+	# MSVC doesn't provide this option and has its own ABI issues anyway.
+	option(cpp11 "build with C++11 support (affects ABI)" OFF)
+endif()
 option(tcmalloc "link against google performance tools tcmalloc" OFF)
 option(pool-allocators "Uses a pool allocator for disk and piece buffers" ON)
 option(encryption "link against openssl and enable encryption" ON)
@@ -289,10 +292,6 @@ else()
 	endif (MSVC)
 endif()
 
-if (cpp11)
-	add_definitions(-std=c++11)
-endif()
-
 if (MSVC)
 # disable bogus deprecation warnings on msvc8
 	add_definitions(-D_SCL_SECURE_NO_DEPRECATE -D_CRT_SECURE_NO_DEPRECATE)
@@ -303,15 +302,19 @@ if (MSVC)
 
 #$(SolutionDir)<toolset>msvc,<variant>release:<linkflags>/OPT:ICF=5
 #$(SolutionDir)<toolset>msvc,<variant>release:<linkflags>/OPT:REF
-elseif(NOT cpp11)
-	add_definitions(-Wno-c++11-extensions)
+else()
+	if (cpp11)
+		add_definitions(-std=c++11)
+	else()
+		add_definitions(-Wno-c++11-extensions)
+	endif()
 endif()
 
 add_definitions(-D_FILE_OFFSET_BITS=64)
 add_definitions(-DBOOST_EXCEPTION_DISABLE)
 add_definitions(-DBOOST_ASIO_ENABLE_CANCELIO)
 
-if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND "${CMAKE_GENERATOR}" STREQUAL "Ninja")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_GENERATOR STREQUAL "Ninja")
 	add_definitions(-fcolor-diagnostics)
 endif()
 
