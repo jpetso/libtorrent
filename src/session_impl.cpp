@@ -4129,11 +4129,42 @@ retry:
 
 #ifndef TORRENT_DISABLE_DHT
 
+	void session_impl::dht_queue_or_invoke(boost::function<void()> const& f)
+	{
+		if (!m_dht) return;
+
+		if (m_dht_queued_actions.empty())
+		{
+			f();
+			return;
+		}
+		m_dht_queued_actions.push_back(f);
+	}
+
+	void session_impl::invoke_dht_queued_actions()
+	{
+		if (m_dht)
+		{
+			for (std::list<boost::function<void()> >::iterator i = m_dht_queued_actions.begin()
+				, end(m_dht_queued_actions.end()); i != end; ++i)
+			{
+				(*i)();
+			}
+		}
+		m_dht_queued_actions.clear();
+	}
+
 	void session_impl::add_dht_node(udp::endpoint n)
+	{
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::add_dht_node_impl, this, n));
+	}
+
+	void session_impl::add_dht_node_impl(udp::endpoint n)
 	{
 		TORRENT_ASSERT(is_network_thread());
 
-		if (m_dht) m_dht->add_node(n);
+		m_dht->add_node(n);
 	}
 
 	void session_impl::prioritize_dht(boost::weak_ptr<torrent> t)
@@ -5120,13 +5151,11 @@ retry:
 			return torrent_handle();
 		}
 
-#ifndef TORRENT_DISABLE_DHT	
-		// add p.dht_nodes to the DHT, if enabled
-		if (m_dht && !p.dht_nodes.empty())
+#ifndef TORRENT_DISABLE_DHT
+		if (!p.dht_nodes.empty())
 		{
-			for (std::vector<std::pair<std::string, int> >::const_iterator i = p.dht_nodes.begin()
-				, end(p.dht_nodes.end()); i != end; ++i)
-				m_dht->add_node(*i);
+			dht_queue_or_invoke(boost::bind(
+				&session_impl::add_dht_node_names_impl, this, p.dht_nodes));
 		}
 #endif
 
@@ -5287,13 +5316,13 @@ retry:
 #endif
 
 #ifndef TORRENT_DISABLE_DHT
-		if (m_dht && params.ti)
+		if (params.ti)
 		{
 			torrent_info::nodes_t const& nodes = params.ti->nodes();
-			std::for_each(nodes.begin(), nodes.end(), boost::bind(
-				(void(dht::dht_tracker::*)(std::pair<std::string, int> const&))
-				&dht::dht_tracker::add_node
-				, boost::ref(m_dht), _1));
+			if (!nodes.empty()) {
+				dht_queue_or_invoke(boost::bind(
+					&session_impl::add_dht_node_names_impl, this, nodes));
+			}
 		}
 #endif
 
@@ -5768,10 +5797,27 @@ retry:
 		stop_dht();
 		m_dht = new dht::dht_tracker(*this, m_udp_socket, m_dht_settings, &startup_state);
 
-		for (std::list<udp::endpoint>::iterator i = m_dht_router_nodes.begin()
-			, end(m_dht_router_nodes.end()); i != end; ++i)
+		if (dht_router_node_endpoints_missing())
 		{
-			m_dht->add_router_node(*i);
+			m_dht_queued_actions.push_back(boost::bind(
+				&session_impl::start_dht_impl, this, startup_state));
+			return;
+		}
+		start_dht_impl(startup_state);
+	}
+
+	void session_impl::start_dht_impl(entry const& startup_state)
+	{
+		TORRENT_ASSERT(m_dht);
+
+		for (router_nodes_t::iterator r = m_dht_router_nodes.begin()
+			, end(m_dht_router_nodes.end()); r != end; ++r)
+		{
+			for (std::list<udp::endpoint>::iterator i = r->second.begin()
+				, end(r->second.end()); i != end; ++i)
+			{
+				m_dht->add_router_node(*i);
+			}
 		}
 
 		m_dht->start(startup_state, boost::bind(&on_bootstrap, boost::ref(m_alerts)));
@@ -5781,10 +5827,22 @@ retry:
 
 	void session_impl::stop_dht()
 	{
+		m_dht_queued_actions.clear();
 		if (!m_dht) return;
 		m_udp_socket.unsubscribe(m_dht.get());
 		m_dht->stop();
 		m_dht = 0;
+	}
+
+	bool session_impl::dht_router_node_endpoints_missing() const
+	{
+		for (router_nodes_t::const_iterator i = m_dht_router_nodes.begin()
+			, end(m_dht_router_nodes.end()); i != end; ++i)
+		{
+			// an empty list means name resolution hasn't yet returned
+			if (i->second.empty()) return true;
+		}
+		return false;
 	}
 
 	void session_impl::set_dht_settings(dht_settings const& settings)
@@ -5802,7 +5860,20 @@ retry:
 
 	void session_impl::add_dht_node_name(std::pair<std::string, int> const& node)
 	{
-		if (m_dht) m_dht->add_node(node);
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::add_dht_node_name_impl, this, node));
+	}
+
+	void session_impl::add_dht_node_name_impl(std::pair<std::string, int> const& node)
+	{
+		m_dht->add_node(node);
+	}
+
+	void session_impl::add_dht_node_names_impl(std::vector<std::pair<std::string, int> > const& nodes)
+	{
+		for (std::vector<std::pair<std::string, int> >::const_iterator i = nodes.begin()
+			, end(nodes.end()); i != end; ++i)
+			m_dht->add_node(*i);
 	}
 
 	void session_impl::add_dht_router(std::pair<std::string, int> const& node)
@@ -5813,12 +5884,14 @@ retry:
 		char port[7];
 		snprintf(port, sizeof(port), "%d", node.second);
 		tcp::resolver::query q(node.first, port);
+		m_dht_router_nodes[node]; // insert empty list or keep current one
 		m_host_resolver.async_resolve(q,
-			boost::bind(&session_impl::on_dht_router_name_lookup, this, _1, _2));
+			boost::bind(&session_impl::on_dht_router_name_lookup, this, _1, _2, node));
 	}
 
 	void session_impl::on_dht_router_name_lookup(error_code const& e
-		, tcp::resolver::iterator host)
+		, tcp::resolver::iterator host
+		, std::pair<std::string, int> const& node)
 	{
 #if defined TORRENT_ASIO_DEBUGGING
 		complete_async("session_impl::on_dht_router_name_lookup");
@@ -5828,6 +5901,9 @@ retry:
 			if (m_alerts.should_post<dht_error_alert>())
 				m_alerts.post_alert(dht_error_alert(
 					dht_error_alert::hostname_lookup, e));
+			m_dht_router_nodes.erase(node);
+			if (!dht_router_node_endpoints_missing())
+				invoke_dht_queued_actions();
 			return;
 		}
 
@@ -5836,9 +5912,12 @@ retry:
 			// router nodes should be added before the DHT is started (and bootstrapped)
 			udp::endpoint ep(host->endpoint().address(), host->endpoint().port());
 			if (m_dht) m_dht->add_router_node(ep);
-			m_dht_router_nodes.push_back(ep);
+			m_dht_router_nodes[node].push_back(ep);
 			++host;
 		}
+
+		if (!dht_router_node_endpoints_missing())
+			invoke_dht_queued_actions();
 	}
 
 	// callback for dht_immutable_get
@@ -5851,7 +5930,12 @@ retry:
 
 	void session_impl::dht_get_immutable_item(sha1_hash const& target)
 	{
-		if (!m_dht) return;
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::dht_get_immutable_item_impl, this, target));
+	}
+
+	void session_impl::dht_get_immutable_item_impl(sha1_hash const& target)
+	{
 		m_dht->get_item(target, boost::bind(&session_impl::get_immutable_callback
 			, this, target, _1));
 	}
@@ -5869,7 +5953,13 @@ retry:
 	void session_impl::dht_get_mutable_item(boost::array<char, 32> key
 		, std::string salt)
 	{
-		if (!m_dht) return;
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::dht_get_mutable_item_impl, this, key, salt));
+	}
+
+	void session_impl::dht_get_mutable_item_impl(boost::array<char, 32> key
+		, std::string salt)
+	{
 		m_dht->get_item(key.data(), boost::bind(&session_impl::get_mutable_callback
 			, this, _1), salt);
 	}
@@ -5882,7 +5972,12 @@ retry:
 
 	void session_impl::dht_put_item(entry data, sha1_hash target)
 	{
-		if (!m_dht) return;
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::dht_put_item_impl, this, data, target));
+	}
+
+	void session_impl::dht_put_item_impl(entry data, sha1_hash target)
+	{
 		m_dht->put_item(data, boost::bind(&on_dht_put, boost::ref(m_alerts)
 			, target));
 	}
@@ -5908,7 +6003,15 @@ retry:
 			, boost::uint64_t&, std::string const&)> cb
 		, std::string salt)
 	{
-		if (!m_dht) return;
+		dht_queue_or_invoke(boost::bind(
+			&session_impl::dht_put_mutable_item_impl, this, key, cb, salt));
+	}
+
+	void session_impl::dht_put_mutable_item_impl(boost::array<char, 32> key
+		, boost::function<void(entry&, boost::array<char,64>&
+			, boost::uint64_t&, std::string const&)> cb
+		, std::string salt)
+	{
 		m_dht->put_item(key.data(), boost::bind(&put_mutable_callback
 			, boost::ref(m_alerts), _1, cb), salt);
 	}

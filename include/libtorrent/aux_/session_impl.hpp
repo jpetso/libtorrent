@@ -300,14 +300,22 @@ namespace libtorrent
 			session_settings const& settings() const { return m_settings; }
 
 #ifndef TORRENT_DISABLE_DHT	
+			void dht_queue_or_invoke(boost::function<void()> const& f);
+			void invoke_dht_queued_actions();
+
 			void add_dht_node_name(std::pair<std::string, int> const& node);
+			void add_dht_node_name_impl(std::pair<std::string, int> const& node);
+			void add_dht_node_names_impl(std::vector<std::pair<std::string, int> > const& nodes);
 			void add_dht_node(udp::endpoint n);
+			void add_dht_node_impl(udp::endpoint n);
 			void add_dht_router(std::pair<std::string, int> const& node);
 			void set_dht_settings(dht_settings const& s);
 			dht_settings const& get_dht_settings() const { return m_dht_settings; }
 			void start_dht();
 			void stop_dht();
 			void start_dht(entry const& startup_state);
+			void start_dht_impl(entry const& startup_state);
+			bool dht_router_node_endpoints_missing() const;
 
 			// this is called for torrents when they are started
 			// it will prioritize them for announcing to
@@ -319,23 +327,32 @@ namespace libtorrent
 			void get_mutable_callback(dht::item const& i);
 
 			void dht_get_immutable_item(sha1_hash const& target);
+			void dht_get_immutable_item_impl(sha1_hash const& target);
 
 			void dht_get_mutable_item(boost::array<char, 32> key
 				, std::string salt = std::string());
+			void dht_get_mutable_item_impl(boost::array<char, 32> key
+				, std::string salt);
 
 			void dht_put_item(entry data, sha1_hash target);
+			void dht_put_item_impl(entry data, sha1_hash target);
 
 			void dht_put_mutable_item(boost::array<char, 32> key
 				, boost::function<void(entry&, boost::array<char,64>&
 					, boost::uint64_t&, std::string const&)> cb
 				, std::string salt = std::string());
+			void dht_put_mutable_item_impl(boost::array<char, 32> key
+				, boost::function<void(entry&, boost::array<char,64>&
+					, boost::uint64_t&, std::string const&)> cb
+				, std::string salt);
 
 #ifndef TORRENT_NO_DEPRECATE
 			entry dht_state() const;
 #endif
 			void on_dht_announce(error_code const& e);
 			void on_dht_router_name_lookup(error_code const& e
-				, tcp::resolver::iterator host);
+				, tcp::resolver::iterator host
+				, std::pair<std::string, int> const& node);
 #endif
 
 			void maybe_update_udp_mapping(int nat, int local_port, int external_port);
@@ -930,7 +947,12 @@ namespace libtorrent
 			
 			// these are used when starting the DHT
 			// (and bootstrapping it), and then erased
-			std::list<udp::endpoint> m_dht_router_nodes;
+			typedef std::map<std::pair<std::string, int>, std::list<udp::endpoint> > router_nodes_t;
+			router_nodes_t m_dht_router_nodes;
+
+			// until router nodes are resolved, DHT actions
+			// will be queued in this function queue
+			std::list<boost::function<void()> > m_dht_queued_actions;
 
 			// this announce timer is used
 			// by the DHT.
