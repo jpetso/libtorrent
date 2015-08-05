@@ -70,6 +70,14 @@ void get_item::got_data(bdecode_node const& v,
 		{
 			if (!m_data.assign(v, salt, seq, pk, sig))
 				return;
+
+			// For get_item, we should call callback when we get data.
+			// The data maybe is not the latest, but we can update it later.
+			// Waitting transaction timeout (15 seconds) is not efficient.
+			// For put_item, it put new values to DHT when done(), so this
+			// change shouldn't break anything since put_item callback
+			// almost doing nothing, just a notification.
+			m_data_callback(m_data);
 		}
 	}
 	else if (m_data.empty())
